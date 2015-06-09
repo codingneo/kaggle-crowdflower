@@ -198,7 +198,7 @@ if __name__ == '__main__':
     test = test.drop('id', axis=1)
     
     # create labels. drop useless columns
-    y = train.median_relevance.values
+    y=  train['median_relevance'].values.astype(np.int32)
     train = train.drop(['median_relevance', 'relevance_variance'], axis=1)
 
     # stemming
@@ -309,7 +309,7 @@ if __name__ == '__main__':
         ],
     
         # layer parameters:
-        input_shape=(None,X.shape[1]),
+        input_shape=(None,200),
         hidden1_num_units=512,  # number of units in hidden layer
         dropout1_p=0.5,
         hidden2_num_units=256,  # number of units in hidden layer
@@ -362,6 +362,58 @@ if __name__ == '__main__':
         y2 = y[random_indices[ceil(train.shape[0]/2):]]
 
         X1, y1 = shuffle(X1, y1, random_state=7)
+
+        # We fit neural network
+        nn= NeuralNet(
+            layers=[  # three layers: one hidden layer
+                ('input', layers.InputLayer),
+                ('hidden1', layers.DenseLayer),
+                ('dropout1', layers.DropoutLayer),
+                ('hidden2', layers.DenseLayer),
+                ('dropout2', layers.DropoutLayer),
+                ('output', layers.DenseLayer),
+            ],
+        
+            # layer parameters:
+            input_shape=(None,200),
+            hidden1_num_units=512,  # number of units in hidden layer
+            dropout1_p=0.5,
+            hidden2_num_units=256,  # number of units in hidden layer
+            hidden2_nonlinearity=rectify,
+            dropout2_p=0.4,
+
+            output_nonlinearity=softmax,  # output layer uses identity function
+            output_num_units=5,  # target values
+
+            # optimization method:
+            update=adagrad,
+
+            update_learning_rate=theano.shared(np.float32(0.1)),
+
+
+            on_epoch_finished=[
+                AdjustVariable('update_learning_rate', start=0.1, stop=0.0001),
+
+                EarlyStopping(patience=10),
+            ],
+            use_label_encoder=False,
+
+            batch_iterator_train=BatchIterator(batch_size=100),
+            regression=False,  # flag to indicate we're dealing with regression problem
+            max_epochs=100,  # we want to train this many epochs
+            verbose=1,
+            eval_size=0.1
+
+        )
+
+
+        # Create the pipeline 
+        # Initialize SVD
+        best_svd_nn = TruncatedSVD(n_components=200)
+        scl_nn = StandardScaler()
+        meta_clf1 = pipeline.Pipeline([('svd', best_svd_nn),
+                                      ('scl', scl_nn),
+                                      ('nn', nn)])
         meta_clf1.fit(X1, y1)
         pred_feat1 = meta_clf1.predict_proba(X2)
 
