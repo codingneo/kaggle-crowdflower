@@ -255,44 +255,63 @@ if __name__ == '__main__':
     # X_test = hstack([X_test, csr_matrix((test_description_cnt, (test_ridx, test_cidx)), shape=(test.shape[0],1))])
 
     # Initialize SVD
-    svd = TruncatedSVD()
+    svd = TruncatedSVD(n_components=200)
    
     # Initialize the standard scaler 
     scl = StandardScaler()
     
-    # We will use SVM here..
-    svm_model = SVC()
+    # We fit neural network
+    nn= NeuralNet(
+        layers=[  # three layers: one hidden layer
+            ('input', layers.InputLayer),
+            ('hidden1', layers.DenseLayer),
+            ('dropout1', layers.DropoutLayer),
+            ('hidden2', layers.DenseLayer),
+            ('dropout2', layers.DropoutLayer),
+            ('output', layers.DenseLayer),
+        ],
+    
+        # layer parameters:
+        input_shape=(None,200),
+        hidden1_num_units=512,  # number of units in hidden layer
+        dropout1_p=0.5,
+        hidden2_num_units=256,  # number of units in hidden layer
+        hidden2_nonlinearity=rectify,
+        dropout2_p=0.4,
+
+        output_nonlinearity=softmax,  # output layer uses identity function
+        output_num_units=5,  # target values
+
+        # optimization method:
+        update=adagrad,
+
+        update_learning_rate=theano.shared(np.float32(0.1)),
+
+
+        on_epoch_finished=[
+            AdjustVariable('update_learning_rate', start=0.1, stop=0.0001),
+
+            EarlyStopping(patience=10),
+        ],
+        use_label_encoder=False,
+
+        batch_iterator_train=BatchIterator(batch_size=100),
+        regression=False,  # flag to indicate we're dealing with regression problem
+        max_epochs=100,  # we want to train this many epochs
+        verbose=1,
+        eval_size=0.1
+
+    )
+
     
     # Create the pipeline 
     clf = pipeline.Pipeline([('svd', svd),
                              ('scl', scl),
-                             ('svm', svm_model)])
-    
-    # Create a parameter grid to search for best parameters for everything in the pipeline
-    param_grid = {'svd__n_components' : [200, 400],
-                  'svm__C': [10, 12]}
-    
-    # Kappa Scorer 
-    kappa_scorer = metrics.make_scorer(quadratic_weighted_kappa, greater_is_better = True)
-    
-    # Initialize Grid Search Model
-    model = grid_search.GridSearchCV(estimator = clf, param_grid=param_grid, scoring=kappa_scorer,
-                                     verbose=10, n_jobs=-1, iid=True, refit=True, cv=2)
-                                     
-    # Fit Grid Search Model
-    model.fit(X, y)
-    print("Best score: %0.3f" % model.best_score_)
-    print("Best parameters set:")
-    best_parameters = model.best_estimator_.get_params()
-    for param_name in sorted(param_grid.keys()):
-        print("\t%s: %r" % (param_name, best_parameters[param_name]))
-    
-    # Get best model
-    best_model = model.best_estimator_
-    
+                             ('nn', nn)])
+        
     # Fit model with best parameters optimized for quadratic_weighted_kappa
-    best_model.fit(X,y)
-    preds = best_model.predict(X_test)
+    clf.fit(X,y)
+    preds = clf.predict(X_test)
 
     # submission = pd.DataFrame({"id": idx, "prediction": preds})
     # submission.to_csv("./submission/svc.csv", index=False)
@@ -303,16 +322,29 @@ if __name__ == '__main__':
     # We fit extreme random tree
     etc = ExtraTreesClassifier(500)
 
+    # We will use SVM here..
+    svm = SVC(C=12, probability=True)
+
+    # Create the pipeline 
+    svd_svm = TruncatedSVD(n_components=200)
+    scl_svm = StandardScaler()
+    meta_clf1 = pipeline.Pipeline([('svd', svd_svm),
+                             ('scl', scl_svm),
+                             ('svm', svm)])
+
+
     # Create the pipeline 
     # Initialize SVD
-    best_svd_lr = TruncatedSVD(n_components=600)
+    svd_lr = TruncatedSVD(n_components=600)
     scl_lr = StandardScaler()
-    meta_clf2 = pipeline.Pipeline([('svd', best_svd_lr),
+    meta_clf2 = pipeline.Pipeline([('svd', svd_lr),
                                   ('scl', scl_lr),
                                   ('lr', lr)])
 
-    meta_clf3 = pipeline.Pipeline([('svd', svd),
-                                  ('scl', scl),
+    svd_etc = TruncatedSVD(n_components=200)
+    scl_etc = StandardScaler()
+    meta_clf3 = pipeline.Pipeline([('svd', svd_etc),
+                                  ('scl', scl_etc),
                                   ('etc', etc)])
 
 
@@ -378,7 +410,7 @@ if __name__ == '__main__':
         # Initialize SVD
         best_svd_nn = TruncatedSVD(n_components=200)
         scl_nn = StandardScaler()
-        meta_clf1 = pipeline.Pipeline([('svd', best_svd_nn),
+        basic_model = pipeline.Pipeline([('svd', best_svd_nn),
                                       ('scl', scl_nn),
                                       ('nn', nn)])
         meta_clf1.fit(X1, y1)
@@ -393,7 +425,7 @@ if __name__ == '__main__':
         # new_data = hstack([X2, csr_matrix(pred_feat1), csr_matrix(pred_feat2)])
         new_data = hstack([X2, csr_matrix(pred_feat1), csr_matrix(pred_feat2), csr_matrix(pred_feat3)])
         
-        best_model.fit(new_data, y2)
+        basic_model.fit(new_data, y2)
         # best_model_2 = get_best_model(new_data, y2)
 
         # Make prediction
@@ -406,7 +438,7 @@ if __name__ == '__main__':
         # new_X_test = hstack([X_test, csr_matrix(test_pred_feat1), csr_matrix(test_pred_feat2)])
         new_X_test = hstack([X_test, csr_matrix(test_pred_feat1), csr_matrix(test_pred_feat2), csr_matrix(test_pred_feat3)])
 
-        preds += best_model.predict(new_X_test)
+        preds += basic_model.predict(new_X_test)
 
         print(preds/(bag_idx+1))    
 
@@ -415,4 +447,4 @@ if __name__ == '__main__':
     
     # Create your first submission file
     submission = pd.DataFrame({"id": idx, "prediction": preds})
-    submission.to_csv("./submission/meta-bagging-nn.csv", index=False)
+    submission.to_csv("./submission/meta-bagging-reverse.csv", index=False)
