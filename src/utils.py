@@ -1,5 +1,11 @@
+import numpy as np
+import pandas as pd
+from nltk.stem.porter import *
+import re
+from bs4 import BeautifulSoup
 from sklearn.svm import SVC
 from sklearn.decomposition import NMF, TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import StandardScaler
 from sklearn import decomposition, pipeline, metrics, grid_search
 
@@ -86,6 +92,83 @@ def quadratic_weighted_kappa(y, y_pred):
             denominator += d * expected_count / num_scored_items
 
     return (1.0 - numerator / denominator)
+
+def matchCnt(query, txt):
+    num_matched = 0
+    if (pd.isnull(txt)):
+        return 0
+    else:
+        for word in query.split(' '):
+            if word.lower() in txt.lower():
+                num_matched += 1
+            
+        return num_matched/len(query.split(' '))
+
+def countWords(txt):
+    if (pd.isnull(txt)):
+        return 0
+    else:
+        return len(txt.lower().split(' '))
+
+def stemming(txt):
+    s = (" ").join(stem(x) for x in txt.split(" "))
+    # s = (" ").join(["q"+ z for z in txt.split(" ")])
+    # s=re.sub("[^a-zA-Z0-9]"," ", s)
+    # s= (" ").join([stemmer.stem(z) for z in s.split(" ")])
+
+    # import string
+    # exclude = set(string.punctuation)
+    # s = ''.join(ch for ch in s if ch not in exclude)
+
+    return s
+
+
+def gen_features(train, test):
+    s_data = []
+    s_labels = []
+    t_data = []
+
+    #remove html, remove non text or numeric, make query and title unique features for counts using prefix (accounted for in stopwords tweak)
+    stemmer = PorterStemmer()
+    ## Stemming functionality
+    class stemmerUtility(object):
+        """Stemming functionality"""
+        @staticmethod
+        def stemPorter(review_text):
+            porter = PorterStemmer()
+            preprocessed_docs = []
+            for doc in review_text:
+                final_doc = []
+                for word in doc:
+                    final_doc.append(porter.stem(word))
+                    #final_doc.append(wordnet.lemmatize(word)) #note that lemmatize() can also takes part of speech as an argument!
+                preprocessed_docs.append(final_doc)
+            return preprocessed_docs
+    
+    
+    for i in range(len(train.id)):
+        s=(" ").join(["q"+ z for z in BeautifulSoup(train["query"][i]).get_text(" ").split(" ")]) + " " + (" ").join(["z"+ z for z in BeautifulSoup(train.product_title[i]).get_text(" ").split(" ")]) + " " + BeautifulSoup(train.product_description[i]).get_text(" ")
+        s=re.sub("[^a-zA-Z0-9]"," ", s)
+        s= (" ").join([stemmer.stem(z) for z in s.split(" ")])
+        s_data.append(s)
+        s_labels.append(str(train["median_relevance"][i]))
+    for i in range(len(test.id)):
+        s=(" ").join(["q"+ z for z in BeautifulSoup(test["query"][i]).get_text().split(" ")]) + " " + (" ").join(["z"+ z for z in BeautifulSoup(test.product_title[i]).get_text().split(" ")]) + " " + BeautifulSoup(test.product_description[i]).get_text()
+        s=re.sub("[^a-zA-Z0-9]"," ", s)
+        s= (" ").join([stemmer.stem(z) for z in s.split(" ")])
+        t_data.append(s)
+    
+    # the infamous tfidf vectorizer (Do you remember this one?)
+    tfv = TfidfVectorizer(
+            min_df=5, max_df=500, max_features=None, 
+            strip_accents='unicode', analyzer='word', 
+            token_pattern=r'\w{1,}', ngram_range=(1, 2), 
+            use_idf=True, smooth_idf=True, sublinear_tf=True, 
+            stop_words = 'english')
+    tfv.fit(s_data)
+    X, X_test = tfv.transform(s_data), tfv.transform(t_data)
+
+    return X, X_test
 
 
 def get_best_model(X, y):
